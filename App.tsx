@@ -35,22 +35,26 @@ const App: React.FC = () => {
       createdAt: Date.now(),
       messages: [],
     };
-    // Use a functional update to get the latest sessions state
-    setSessions(prevSessions => [newSession, ...prevSessions]);
+    
+    setSessions(prevSessions => {
+      const updatedSessions = [newSession, ...prevSessions];
+      // Immediately save the new session to prevent it from being lost if the user navigates away.
+      saveSession(currentUser.id, currentPage, newSession);
+      return updatedSessions;
+    });
+    
     setActiveSessionId(newSession.id);
-  }, [currentUser]);
+  }, [currentUser, currentPage]);
 
   useEffect(() => {
     if (currentUser) {
+      // First, always ensure no chat is active when the user or page context changes.
+      // This prevents a chat from being automatically selected on login or page switch.
+      setActiveSessionId(null);
+      
+      // Then, load the sessions for the new context.
       const loadedSessions = getAllSessions(currentUser.id, currentPage);
       setSessions(loadedSessions);
-      if (loadedSessions.length > 0) {
-        setActiveSessionId(loadedSessions[0].id);
-      } else {
-        // Do not create a new chat automatically.
-        // Set active session to null, which will show a placeholder.
-        setActiveSessionId(null);
-      }
     }
   }, [currentUser, currentPage]);
 
@@ -85,12 +89,8 @@ const App: React.FC = () => {
     const updatedSessions = deleteSession(currentUser.id, currentPage, sessionId);
     setSessions(updatedSessions);
     if (activeSessionId === sessionId) {
-        if (updatedSessions.length > 0) {
-            setActiveSessionId(updatedSessions[0].id);
-        } else {
-            // No more sessions, so clear the active one
-            setActiveSessionId(null);
-        }
+        // After deleting the active session, return to the placeholder view.
+        setActiveSessionId(null);
     }
   };
   

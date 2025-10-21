@@ -1,236 +1,249 @@
+// FIX: Provide content for ChatInterface.tsx to resolve module not found error.
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import type { Message as MessageType, FileData, Page, Source } from '../types';
 import { generateContentStream } from '../services/geminiService';
-import Message from './Message';
-import Loader from './Loader';
+import { getHistory, saveHistory } from '../services/chatHistoryService';
+import type { Message, FileData, Page, User, Source } from '../types';
+import MessageComponent from './Message';
 import PaperAirplaneIcon from './icons/PaperAirplaneIcon';
 import PaperclipIcon from './icons/PaperclipIcon';
 import XCircleIcon from './icons/XCircleIcon';
+import Loader from './Loader';
+import SlyntosLogo from './icons/SlyntosLogo';
 
 interface ChatInterfaceProps {
   page: Page;
   systemInstruction: string;
   placeholderText: string;
+  currentUser: User;
   children?: React.ReactNode;
 }
 
-const SUPPORTED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
-const MAX_FILE_SIZE_MB = 4; // Gemini Pro vision limit
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+const MAX_FILES = 5;
 
-const fileToData = (file: File): Promise<FileData> => {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-            const base64 = (reader.result as string).split(',')[1];
-            if (base64) {
-                resolve({ name: file.name, type: file.type, data: base64 });
-            } else {
-                reject(new Error("Failed to read file as base64"));
-            }
-        };
-        reader.onerror = (error) => reject(error);
-        reader.readAsDataURL(file);
-    });
-};
-
-
-const ChatInterface: React.FC<ChatInterfaceProps> = ({
-  page,
-  systemInstruction,
-  placeholderText,
-  children,
-}) => {
-  const [messages, setMessages] = useState<MessageType[]>([]);
-  const [userInput, setUserInput] = useState('');
-  const [files, setFiles] = useState<File[]>([]);
+const ChatInterface: React.FC<ChatInterfaceProps> = ({ page, systemInstruction, placeholderText, currentUser, children }) => {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [files, setFiles] = useState<FileData[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  const chatHistoryKey = `chatHistory-${currentUser.id}-${page}`;
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
-  
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    if (event.target.files) {
-      const selectedFiles = Array.from(event.target.files);
-      const newFiles = [...files];
-      let hasError = false;
+    const loadedMessages = getHistory(chatHistoryKey);
+    if (loadedMessages.length > 0) {
+      setMessages(loadedMessages);
+    }
+  }, [chatHistoryKey]);
 
-      for (const file of selectedFiles) {
-        if (!SUPPORTED_MIME_TYPES.includes(file.type)) {
-          setError(`Unsupported file type: ${file.name}. Please use JPEG, PNG, or WEBP.`);
-          hasError = true;
-          continue;
-        }
-        if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
-           setError(`File too large: ${file.name}. Maximum size is ${MAX_FILE_SIZE_MB}MB.`);
-           hasError = true;
-           continue;
-        }
-        if (!files.some(f => f.name === file.name && f.size === file.size)) {
-            newFiles.push(file);
-        }
+  useEffect(() => {
+    saveHistory(chatHistoryKey, messages);
+  }, [messages, chatHistoryKey]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+    }
+  }, [input]);
+
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (!event.target.files) return;
+
+    const selectedFiles = Array.from(event.target.files);
+
+    if (files.length + selectedFiles.length > MAX_FILES) {
+      alert(`You can only upload a maximum of ${MAX_FILES} files.`);
+      return;
+    }
+
+    const filesToProcess: File[] = [];
+    let currentTotalSize = files.reduce((acc, file) => acc + file.size, 0);
+
+    for (const file of selectedFiles) {
+      if (file.size > MAX_FILE_SIZE) {
+        alert(`File ${file.name} is too large. Maximum size is 10MB.`);
+        continue; // Skip this file
+      }
+      
+      const newTotalSize = currentTotalSize + file.size;
+      const totalSizeLimit = MAX_FILE_SIZE * MAX_FILES;
+      if (newTotalSize > totalSizeLimit) {
+          alert(`Adding ${file.name} would exceed the total size limit of ${totalSizeLimit / (1024 * 1024)}MB.`);
+          continue; // Skip this file
       }
 
-      if(!hasError) setError(null);
-      setFiles(newFiles);
-      
-      if(event.target) event.target.value = '';
+      currentTotalSize = newTotalSize;
+      filesToProcess.push(file);
+    }
+    
+    const readFileAsBase64 = (file: File): Promise<FileData> => {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const base64Data = (reader.result as string).split(',')[1];
+          resolve({
+            name: file.name,
+            type: file.type,
+            data: base64Data,
+            size: file.size,
+          });
+        };
+        // FIX: The `onerror` event doesn't receive the error as an argument.
+        // The error is on the reader instance itself.
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
+    };
+
+    try {
+      const newFileData = await Promise.all(filesToProcess.map(readFileAsBase64));
+      setFiles((prevFiles) => [...prevFiles, ...newFileData]);
+    } catch (error) {
+      console.error('Failed to read files:', error);
+      alert('An error occurred while reading the files.');
+    } finally {
+        if(fileInputRef.current) {
+            fileInputRef.current.value = "";
+        }
     }
   };
+
 
   const handleRemoveFile = (index: number) => {
     setFiles(files.filter((_, i) => i !== index));
   };
+  
+  const handleSubmit = useCallback(async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (isLoading || (!input.trim() && files.length === 0)) {
+      return;
+    }
 
-  const handleSubmit = useCallback(async (e: React.FormEvent) => {
-    e.preventDefault();
-    if ((!userInput.trim() && files.length === 0) || isLoading) return;
-
-    const newUserMessage: MessageType = {
-      id: Date.now().toString(),
-      role: 'user',
-      content: userInput.trim(),
-    };
-    
-    const updatedMessages = [...messages, newUserMessage];
-    const filesToSubmit = [...files];
-
+    const userMessage: Message = { role: 'user', content: input };
+    const updatedMessages: Message[] = [...messages, userMessage];
     setMessages(updatedMessages);
-    setUserInput('');
+    setInput('');
+    const filesToSubmit = [...files];
     setFiles([]);
     setIsLoading(true);
-    setError(null);
 
-    const modelMessageId = (Date.now() + 1).toString();
-    setMessages(prev => [...prev, {
-      id: modelMessageId,
-      role: 'model',
-      content: '',
-      sources: [],
-    }]);
+    const modelMessage: Message = { role: 'model', content: '' };
+    setMessages(prev => [...prev, modelMessage]);
 
+    let fullResponse = '';
+    let allSources: Source[] = [];
     try {
-      const fileData = await Promise.all(filesToSubmit.map(fileToData));
-      const stream = generateContentStream(updatedMessages, systemInstruction, fileData, page);
-      
-      const sourceUris = new Set<string>();
-
+      const stream = generateContentStream(updatedMessages, systemInstruction, filesToSubmit, page);
       for await (const chunk of stream) {
-        setMessages(prev => prev.map(msg => {
-            if (msg.id === modelMessageId) {
-              const newContent = msg.content + chunk.text;
-              const currentSources = msg.sources || [];
-              
-              if (chunk.sources) {
-                chunk.sources.forEach(source => {
-                  if (!sourceUris.has(source.uri)) {
-                    sourceUris.add(source.uri);
-                    currentSources.push(source);
-                  }
-                });
-              }
-              return { ...msg, content: newContent, sources: [...currentSources] };
-            }
-            return msg;
-          })
-        );
+        fullResponse += chunk.text;
+        if (chunk.sources) {
+          // Merge and deduplicate sources
+          const newSources = chunk.sources.filter(s => !allSources.some(as => as.uri === s.uri));
+          allSources = [...allSources, ...newSources];
+        }
+        setMessages(prev => {
+          const lastMsg = prev[prev.length - 1];
+          if (lastMsg && lastMsg.role === 'model') {
+            const updatedLastMsg = { ...lastMsg, content: fullResponse, sources: allSources.length > 0 ? allSources : undefined };
+            return [...prev.slice(0, -1), updatedLastMsg];
+          }
+          return prev;
+        });
       }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'An unexpected error occurred.';
-      setMessages(prev => prev.map(msg => 
-        msg.id === modelMessageId
-          ? { ...msg, content: `Sorry, something went wrong. ${errorMessage}` }
-          : msg
-      ));
+    } catch (error) {
+      console.error(error);
+      const errorMessage = error instanceof Error ? error.message : "An unknown error occurred.";
+      setMessages(prev => {
+        const lastMsg = prev[prev.length - 1];
+        if (lastMsg && lastMsg.role === 'model') {
+          const updatedLastMsg = { ...lastMsg, content: `Error: ${errorMessage}` };
+          return [...prev.slice(0, -1), updatedLastMsg];
+        }
+        return prev;
+      });
     } finally {
       setIsLoading(false);
     }
-  }, [userInput, files, isLoading, messages, systemInstruction, page]);
+  }, [isLoading, input, files, messages, systemInstruction, page, currentUser.id]);
+  
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit();
+    }
+  };
 
   return (
-    <div className="flex flex-col h-full bg-gray-800 rounded-2xl shadow-2xl overflow-hidden border border-gray-700">
-      <div className="flex-1 overflow-y-auto">
-        {messages.length === 0 && !isLoading ? (
-          <div className="flex flex-col items-center justify-center h-full p-8 text-center text-gray-400">
-             <div className="w-20 h-20 mb-4 p-3 bg-gradient-to-br from-purple-600 to-blue-500 rounded-full flex items-center justify-center">
-                 <img src="https://i.imgur.com/2Y0s2sL.png" alt="Slyntos AI Logo" className="w-16 h-16"/>
-             </div>
-            <h2 className="text-2xl font-bold text-gray-200">Slyntos AI</h2>
-            <p className="mt-2">{placeholderText}</p>
-          </div>
-        ) : (
-          <div className="divide-y divide-gray-700">
-            {messages.map(msg => (
-              <Message key={msg.id} message={msg} />
-            ))}
-            <div ref={messagesEndRef} />
-          </div>
-        )}
+    <div className="relative flex flex-col h-full flex-grow">
+      {children}
+
+      {/* Watermark */}
+      <div className="absolute inset-0 flex items-center justify-center pointer-events-none" aria-hidden="true">
+        <div className="text-center text-gray-700 opacity-10">
+          <SlyntosLogo className="w-40 h-40 mx-auto" />
+          <p className="text-4xl font-bold mt-4">Slyntos AI</p>
+        </div>
       </div>
-
-      <div className="p-4 bg-gray-900/50 border-t border-gray-700">
-        {children && <div className="px-2 pb-2">{children}</div>}
-        {error && <div className="text-red-400 text-sm mb-2 px-2">{error}</div>}
-        
-        {files.length > 0 && (
-            <div className="mb-3 p-3 bg-gray-800 border border-gray-700 rounded-lg">
-              <div className="flex flex-wrap gap-2">
-                {files.map((file, index) => (
-                  <div key={`${file.name}-${index}`} className="bg-gray-600 rounded-full pl-3 pr-2 py-1 text-sm text-gray-200 flex items-center gap-2 max-w-xs">
-                    <span className="truncate">{file.name}</span>
-                    <button onClick={() => handleRemoveFile(index)} type="button" className="flex-shrink-0" aria-label={`Remove ${file.name}`}>
-                      <XCircleIcon className="w-5 h-5 text-gray-400 hover:text-white transition-colors" />
-                    </button>
-                  </div>
-                ))}
-              </div>
+      
+      <div className="flex-grow overflow-y-auto" id="message-list">
+        {messages.map((msg, index) => (
+          <MessageComponent key={index} message={msg} />
+        ))}
+        <div ref={messagesEndRef} />
+      </div>
+      <div className="mt-auto bg-gray-900 sticky bottom-0 w-full px-2 sm:px-4 pb-2 sm:pb-4">
+        <form onSubmit={handleSubmit} className="relative">
+          {files.length > 0 && (
+            <div className="p-2 bg-gray-800 rounded-t-md flex flex-wrap gap-2">
+              {files.map((file, index) => (
+                <div key={index} className="bg-gray-700 text-xs rounded-full px-3 py-1 flex items-center gap-2">
+                  <span>{file.name}</span>
+                  <button onClick={() => handleRemoveFile(index)} type="button" className="text-gray-400 hover:text-white">
+                    <XCircleIcon className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
             </div>
-        )}
-
-        <form onSubmit={handleSubmit} className="flex items-start gap-3">
-          <input
-            type="file"
-            multiple
-            ref={fileInputRef}
-            onChange={handleFileChange}
-            style={{ display: 'none' }}
-            accept={SUPPORTED_MIME_TYPES.join(',')}
-          />
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isLoading}
-            className="flex-shrink-0 h-12 w-12 bg-gray-700 rounded-lg flex items-center justify-center text-gray-300 hover:bg-gray-600 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            aria-label="Attach files"
-          >
-            <PaperclipIcon className="w-6 h-6" />
-          </button>
-          <div className="relative flex-1">
+          )}
+          <div className={`flex items-end bg-gray-800 border border-gray-600 ${files.length > 0 ? 'rounded-b-md' : 'rounded-md'} focus-within:ring-2 focus-within:ring-blue-500 transition-shadow duration-200`}>
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="p-3 text-gray-400 hover:text-white"
+              aria-label="Attach files"
+            >
+              <PaperclipIcon className="w-5 h-5" />
+            </button>
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileChange}
+              multiple
+              hidden
+              accept="image/*,video/*,audio/*,text/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
+            />
             <textarea
-              value={userInput}
-              onChange={(e) => setUserInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSubmit(e);
-                }
-              }}
-              placeholder="Type your message or add files..."
-              className="w-full min-h-[48px] bg-gray-700 text-gray-200 rounded-lg p-3 pr-14 resize-none focus:ring-2 focus:ring-purple-500 focus:outline-none transition-shadow duration-200"
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={placeholderText}
               rows={1}
+              className="flex-1 bg-transparent p-3 resize-none outline-none placeholder-gray-500 text-gray-200 text-sm max-h-40"
               disabled={isLoading}
             />
             <button
               type="submit"
-              disabled={isLoading || (!userInput.trim() && files.length === 0)}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 h-10 w-10 bg-purple-600 rounded-full flex items-center justify-center text-white hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed transition-colors duration-200"
+              className="p-3 text-gray-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={isLoading || (!input.trim() && files.length === 0)}
               aria-label="Send message"
             >
               {isLoading ? <Loader /> : <PaperAirplaneIcon className="w-5 h-5" />}

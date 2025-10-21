@@ -51,8 +51,11 @@ export async function* generateContentStream(
             config.tools = [{googleSearch: {}}];
         }
 
+        // FIX: Select model based on the page type to align with Gemini API guidelines for different task complexities.
+        const modelName = page === PageEnum.Academic ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
+
         const responseStream = await ai.models.generateContentStream({
-            model: 'gemini-2.5-pro',
+            model: modelName,
             contents,
             config,
         });

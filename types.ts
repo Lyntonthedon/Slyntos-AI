@@ -1,15 +1,10 @@
-export enum Page {
-  General = 'General',
-  Academic = 'Academic',
-}
-
+// FIX: Provide full content for types.ts to define application-wide types.
 export interface Source {
   uri: string;
   title: string;
 }
 
 export interface Message {
-  id: string;
   role: 'user' | 'model';
   content: string;
   sources?: Source[];
@@ -18,5 +13,16 @@ export interface Message {
 export interface FileData {
   name: string;
   type: string;
-  data: string; // base64 encoded
+  data: string;
+  size: number;
+}
+
+export enum Page {
+  General = 'General',
+  Academic = 'Academic',
+}
+
+export interface User {
+  id: string;
+  username: string;
 }

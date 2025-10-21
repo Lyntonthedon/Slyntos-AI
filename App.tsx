@@ -38,7 +38,6 @@ const App: React.FC = () => {
     
     setSessions(prevSessions => {
       const updatedSessions = [newSession, ...prevSessions];
-      // Immediately save the new session to prevent it from being lost if the user navigates away.
       saveSession(currentUser.id, currentPage, newSession);
       return updatedSessions;
     });
@@ -48,15 +47,16 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (currentUser) {
-      // First, always ensure no chat is active when the user or page context changes.
-      // This prevents a chat from being automatically selected on login or page switch.
-      setActiveSessionId(null);
-      
-      // Then, load the sessions for the new context.
       const loadedSessions = getAllSessions(currentUser.id, currentPage);
       setSessions(loadedSessions);
+      
+      if (loadedSessions.length > 0) {
+        setActiveSessionId(loadedSessions[0].id); // Select the most recent one
+      } else {
+        createNewChat(); // Create a new one if none exist
+      }
     }
-  }, [currentUser, currentPage]);
+  }, [currentUser, currentPage, createNewChat]);
 
   const handleAuthSuccess = (user: User) => {
     sessionStorage.setItem(SESSION_KEY, JSON.stringify(user));
@@ -88,9 +88,12 @@ const App: React.FC = () => {
     if (!currentUser) return;
     const updatedSessions = deleteSession(currentUser.id, currentPage, sessionId);
     setSessions(updatedSessions);
-    if (activeSessionId === sessionId) {
-        // After deleting the active session, return to the placeholder view.
-        setActiveSessionId(null);
+
+    if (updatedSessions.length === 0) {
+      createNewChat(); // If the last chat was deleted, create a new one
+    } else if (activeSessionId === sessionId) {
+      // If the active chat was deleted, select the new most recent one
+      setActiveSessionId(updatedSessions[0].id);
     }
   };
   
@@ -166,10 +169,10 @@ const App: React.FC = () => {
                 {activeSession ? (
                   renderPageContent()
                 ) : (
+                  // This view is now only briefly visible during loading states
                   <div className="relative flex-grow flex flex-col items-center justify-center bg-gray-800/50 rounded-lg text-center text-gray-500 p-4">
-                    <SlyntosLogo className="w-24 h-24 opacity-20" />
-                    <h2 className="mt-4 text-xl font-semibold">Select or start a new chat</h2>
-                    <p className="mt-2 text-sm max-w-xs">Your conversations are saved here. Choose one from the sidebar or click "New Chat" to begin.</p>
+                    <SlyntosLogo className="w-24 h-24 opacity-20 animate-pulse" />
+                    <h2 className="mt-4 text-xl font-semibold">Loading Chat...</h2>
                   </div>
                 )}
             </main>

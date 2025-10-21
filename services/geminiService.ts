@@ -1,6 +1,7 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Modality, FunctionCall } from "@google/genai";
 import type { Message, FileData, Page, Source } from '../types';
 import { Page as PageEnum } from '../types';
+import { GENERATE_IMAGE_TOOL } from '../constants';
 
 const buildGeminiContent = (history: Message[]) => {
     // Gemini expects alternating user/model roles.
@@ -14,12 +15,51 @@ const buildGeminiContent = (history: Message[]) => {
         });
 };
 
+export async function generateImageFromPrompt(prompt: string): Promise<string[]> {
+    if (!process.env.API_KEY) {
+        throw new Error("API_KEY environment variable not set.");
+    }
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    
+    try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-image',
+            contents: {
+                parts: [{ text: prompt }],
+            },
+            config: {
+                responseModalities: [Modality.IMAGE],
+            },
+        });
+
+        const images: string[] = [];
+        for (const part of response.candidates?.[0]?.content?.parts ?? []) {
+            if (part.inlineData) {
+                images.push(part.inlineData.data);
+            }
+        }
+        
+        if (images.length === 0) {
+            throw new Error("The AI did not return an image. Please try rephrasing your prompt.");
+        }
+
+        return images;
+    } catch (error) {
+        console.error("Gemini Image Generation failed:", error);
+        if (error instanceof Error) {
+            throw new Error(`Image generation failed: ${error.message}`);
+        }
+        throw new Error("An unknown error occurred during image generation.");
+    }
+}
+
+
 export async function* generateContentStream(
     history: Message[],
     systemInstruction: string,
     files: FileData[],
     page: Page
-): AsyncGenerator<{ text: string, sources?: Source[] }> {
+): AsyncGenerator<{ text?: string, sources?: Source[], functionCalls?: FunctionCall[] }> {
     if (!process.env.API_KEY) {
         throw new Error("API_KEY environment variable not set.");
     }
@@ -48,11 +88,12 @@ export async function* generateContentStream(
         };
 
         if (page === PageEnum.General) {
-            config.tools = [{googleSearch: {}}];
+            config.tools = [{googleSearch: {}}, GENERATE_IMAGE_TOOL];
         }
 
-        // FIX: Select model based on the page type to align with Gemini API guidelines for different task complexities.
-        const modelName = page === PageEnum.Academic ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
+        const modelName = page === PageEnum.Academic || page === PageEnum.WebsiteCreator 
+            ? 'gemini-2.5-pro' 
+            : 'gemini-2.5-flash';
 
         const responseStream = await ai.models.generateContentStream({
             model: modelName,
@@ -71,6 +112,7 @@ export async function* generateContentStream(
             yield {
                 text: chunk.text,
                 sources: sources && sources.length > 0 ? sources : undefined,
+                functionCalls: chunk.functionCalls
             };
         }
 

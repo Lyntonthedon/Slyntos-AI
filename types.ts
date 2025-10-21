@@ -7,6 +7,7 @@ export interface Source {
 export interface Message {
   role: 'user' | 'model';
   content: string;
+  images?: string[]; // To hold base64 image data
   sources?: Source[];
 }
 
@@ -20,9 +21,12 @@ export interface FileData {
 export enum Page {
   General = 'General',
   Academic = 'Academic',
+  WebsiteCreator = 'Website Creator',
 }
 
 export interface User {
   id: string;
   username: string;
+  password?: string; // Hashed password, for storage only
+  profilePicture?: string; // base64 data URL
 }

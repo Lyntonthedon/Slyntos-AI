@@ -1,7 +1,7 @@
-// FIX: Provide content for Header.tsx to resolve module not found error.
 import React from 'react';
 import { Page, User } from '../types';
 import SlyntosLogo from './icons/SlyntosLogo';
+import UserIcon from './icons/UserIcon'; // For fallback
 
 interface HeaderProps {
   currentPage: Page;
@@ -34,11 +34,20 @@ const Header: React.FC<HeaderProps> = ({ currentPage, onNavigate, currentUser, o
           <SlyntosLogo className="w-10 h-10" />
           <h1 className="text-xl sm:text-2xl font-bold text-gray-100">Slyntos AI</h1>
         </div>
-        <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-400 hidden sm:inline">Welcome, {currentUser.username}</span>
+        <div className="flex items-center gap-3">
+            <div className="text-right hidden sm:block">
+                <p className="text-sm font-medium text-gray-200">Welcome, {currentUser.username}</p>
+            </div>
+            <div className="w-10 h-10 rounded-full bg-gray-700 flex-shrink-0 flex items-center justify-center ring-2 ring-gray-600">
+                {currentUser.profilePicture ? (
+                    <img src={currentUser.profilePicture} alt="Profile" className="w-full h-full rounded-full object-cover" />
+                ) : (
+                    <UserIcon className="w-6 h-6 text-gray-400" />
+                )}
+            </div>
             <button 
               onClick={onLogout}
-              className="px-3 py-1 text-sm font-medium rounded-md bg-gray-700 text-gray-300 hover:bg-gray-600 hover:text-white transition-colors"
+              className="px-3 py-1.5 text-sm font-medium rounded-md bg-gray-700 text-gray-300 hover:bg-gray-600 hover:text-white transition-colors"
             >
               Logout
             </button>
@@ -47,6 +56,7 @@ const Header: React.FC<HeaderProps> = ({ currentPage, onNavigate, currentUser, o
       <nav className="flex items-center gap-2 p-1 bg-gray-800 rounded-lg">
         <NavButton page={Page.General}>General Chat</NavButton>
         <NavButton page={Page.Academic}>Academic Writer</NavButton>
+        <NavButton page={Page.WebsiteCreator}>Website Creator</NavButton>
       </nav>
     </header>
   );

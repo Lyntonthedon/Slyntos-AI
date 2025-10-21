@@ -1,8 +1,6 @@
-// FIX: Provide content for ChatInterface.tsx to resolve module not found error.
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { generateContentStream, generateImageFromPrompt } from '../services/geminiService';
-import { getHistory, saveHistory } from '../services/chatHistoryService';
-import type { Message, FileData, Page, User, Source } from '../types';
+import type { Message, FileData, Page, User, Source, ChatSession } from '../types';
 import MessageComponent from './Message';
 import PaperAirplaneIcon from './icons/PaperAirplaneIcon';
 import PaperclipIcon from './icons/PaperclipIcon';
@@ -12,12 +10,13 @@ import SlyntosLogo from './icons/SlyntosLogo';
 import { Page as PageEnum } from '../types';
 import { FunctionCall } from '@google/genai';
 
-
 interface ChatInterfaceProps {
-  page: Page;
+  session: ChatSession;
+  onSessionUpdate: (session: ChatSession) => void;
   systemInstruction: string;
   placeholderText: string;
   currentUser: User;
+  page: Page;
   onCodeGenerated?: (code: string) => void;
   children?: React.ReactNode;
 }
@@ -25,9 +24,7 @@ interface ChatInterfaceProps {
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 const MAX_FILES = 5;
 
-
-const ChatInterface: React.FC<ChatInterfaceProps> = ({ page, systemInstruction, placeholderText, currentUser, onCodeGenerated, children }) => {
-  const [messages, setMessages] = useState<Message[]>([]);
+const ChatInterface: React.FC<ChatInterfaceProps> = ({ session, onSessionUpdate, systemInstruction, placeholderText, currentUser, page, onCodeGenerated, children }) => {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [files, setFiles] = useState<FileData[]>([]);
@@ -35,22 +32,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ page, systemInstruction, 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const chatHistoryKey = `chatHistory-${currentUser.id}-${page}`;
-
-  useEffect(() => {
-    const loadedMessages = getHistory(chatHistoryKey);
-    if (loadedMessages.length > 0) {
-      setMessages(loadedMessages);
-    }
-  }, [chatHistoryKey]);
-
-  useEffect(() => {
-    saveHistory(chatHistoryKey, messages);
-  }, [messages, chatHistoryKey]);
-
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [session.messages]);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -62,7 +46,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ page, systemInstruction, 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     if (!event.target.files) return;
     const selectedFiles = Array.from(event.target.files);
-    // ... (file validation logic remains the same)
     
     const readFileAsBase64 = (file: File): Promise<FileData> => {
       return new Promise((resolve, reject) => {
@@ -87,7 +70,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ page, systemInstruction, 
     }
   };
 
-
   const handleRemoveFile = (index: number) => {
     setFiles(files.filter((_, i) => i !== index));
   };
@@ -96,16 +78,21 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ page, systemInstruction, 
     e?.preventDefault();
     if (isLoading || (!input.trim() && files.length === 0)) return;
 
+    const isFirstMessage = session.messages.length === 0;
+    const newTitle = isFirstMessage ? input.trim().split(' ').slice(0, 5).join(' ') : session.title;
+
     const userMessage: Message = { role: 'user', content: input };
-    const updatedMessages: Message[] = [...messages, userMessage];
-    setMessages(updatedMessages);
+    const updatedMessages: Message[] = [...session.messages, userMessage];
+    
+    onSessionUpdate({ ...session, messages: updatedMessages, title: newTitle });
+
     setInput('');
     const filesToSubmit = [...files];
     setFiles([]);
     setIsLoading(true);
     
     const modelMessage: Message = { role: 'model', content: '' };
-    setMessages(prev => [...prev, modelMessage]);
+    onSessionUpdate({ ...session, messages: [...updatedMessages, modelMessage], title: newTitle });
 
     let fullResponse = '';
     let allSources: Source[] = [];
@@ -131,64 +118,42 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ page, systemInstruction, 
                 }
             }
 
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-                if (lastMsg && lastMsg.role === 'model') {
-                    const updatedLastMsg = { ...lastMsg, content: fullResponse, sources: allSources.length > 0 ? allSources : undefined };
-                    return [...prev.slice(0, -1), updatedLastMsg];
-                }
-                return prev;
-            });
+            const currentMessages = [...updatedMessages];
+            const lastMsg = currentMessages[currentMessages.length];
+            if (lastMsg && lastMsg.role === 'model') {
+                const updatedLastMsg = { ...lastMsg, content: fullResponse, sources: allSources.length > 0 ? allSources : undefined };
+                onSessionUpdate({ ...session, messages: [...updatedMessages.slice(0, -1), updatedLastMsg], title: newTitle });
+            } else {
+                 onSessionUpdate({ ...session, messages: [...updatedMessages, { role: 'model', content: fullResponse, sources: allSources.length > 0 ? allSources : undefined }], title: newTitle });
+            }
         }
         
-        // Stream finished, now process any collected function calls
         const imageFunctionCall = allFunctionCalls.find(fc => fc.name === 'generate_image');
         if (imageFunctionCall) {
             const imagePrompt = imageFunctionCall.args.prompt as string;
             if (imagePrompt) {
-                // Update message to show we're generating
-                setMessages(prev => {
-                    const lastMsg = prev[prev.length - 1];
-                    const newContent = `${lastMsg.content}\n\n*Generating an image of "${imagePrompt}"...*`.trim();
-                    const updatedLastMsg = { ...lastMsg, content: newContent };
-                    return [...prev.slice(0, -1), updatedLastMsg];
-                });
+                // FIX: Add `as const` to the role property to ensure correct type inference and resolve the TypeScript error.
+                let finalMessages = [...updatedMessages, { role: 'model' as const, content: fullResponse }];
+                onSessionUpdate({ ...session, messages: [...finalMessages, { role: 'model' as const, content: `*Generating an image of "${imagePrompt}"...*` }], title: newTitle });
                 
                 try {
-                    // Call the image service
                     const images = await generateImageFromPrompt(imagePrompt);
-                    
-                    // Update the final message with the images
-                    setMessages(prev => {
-                        const lastMsg = prev[prev.length - 1];
-                        const updatedLastMsg = { ...lastMsg, images };
-                        return [...prev.slice(0, -1), updatedLastMsg];
-                    });
+                    // FIX: Add `as const` to the role property to ensure correct type inference and resolve the TypeScript error.
+                    onSessionUpdate({ ...session, messages: [...finalMessages, { role: 'model' as const, content: fullResponse, images }], title: newTitle });
                 } catch (error) {
                     const errorMessage = error instanceof Error ? error.message : "Unknown error";
-                     setMessages(prev => {
-                        const lastMsg = prev[prev.length - 1];
-                        const newContent = `${lastMsg.content}\n\n*Error generating image: ${errorMessage}*`;
-                        const updatedLastMsg = { ...lastMsg, content: newContent, images: [] };
-                        return [...prev.slice(0, -1), updatedLastMsg];
-                    });
+                    // FIX: Add `as const` to the role property to ensure correct type inference and resolve the TypeScript error.
+                    onSessionUpdate({ ...session, messages: [...finalMessages, { role: 'model' as const, content: `${fullResponse}\n\n*Error generating image: ${errorMessage}*` }], title: newTitle });
                 }
             }
         }
     } catch (error) {
          const errorMessage = error instanceof Error ? error.message : "An unknown error occurred.";
-         setMessages(prev => {
-            const lastMsg = prev[prev.length - 1];
-            if(lastMsg && lastMsg.role === 'model'){
-                const updatedLastMsg = { ...lastMsg, content: `${fullResponse}\n\nError: ${errorMessage}` };
-                return [...prev.slice(0, -1), updatedLastMsg];
-            }
-            return prev;
-        });
+         onSessionUpdate({ ...session, messages: [...updatedMessages, { role: 'model', content: `${fullResponse}\n\nError: ${errorMessage}` }], title: newTitle });
     } finally {
         setIsLoading(false);
     }
-  }, [isLoading, input, files, messages, systemInstruction, page, currentUser.id, onCodeGenerated]);
+  }, [isLoading, input, files, session, onSessionUpdate, systemInstruction, page, onCodeGenerated]);
   
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -198,7 +163,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ page, systemInstruction, 
   };
 
   return (
-    <div className="relative flex flex-col h-full flex-grow">
+    <div className="relative flex flex-col h-full flex-grow bg-gray-800/50 rounded-lg">
       {children}
       
       {page !== PageEnum.WebsiteCreator && (
@@ -210,13 +175,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ page, systemInstruction, 
         </div>
       )}
       
-      <div className="flex-grow overflow-y-auto" id="message-list">
-        {messages.map((msg, index) => (
+      <div className="flex-grow overflow-y-auto relative" id="message-list">
+        {session.messages.map((msg, index) => (
           <MessageComponent key={index} message={msg} currentUser={currentUser} />
         ))}
         <div ref={messagesEndRef} />
       </div>
-      <div className="mt-auto bg-gray-900 sticky bottom-0 w-full px-2 sm:px-4 pb-2 sm:pb-4">
+
+      <div className="mt-auto bg-gray-800/50 sticky bottom-0 w-full px-2 sm:px-4 pb-2 sm:pb-4 rounded-b-lg">
         <form onSubmit={handleSubmit} className="relative">
           {files.length > 0 && (
             <div className="p-2 bg-gray-800 rounded-t-md flex flex-wrap gap-2">

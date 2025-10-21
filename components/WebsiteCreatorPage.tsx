@@ -1,22 +1,45 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import ChatInterface from './ChatInterface';
 import DisclaimerWebsite from './DisclaimerWebsite';
-import { Page, User } from '../types';
+import { Page, User, ChatSession } from '../types';
 import { SYSTEM_INSTRUCTION_WEBSITE_CREATOR } from '../constants';
 
 interface WebsiteCreatorPageProps {
   currentUser: User;
+  session: ChatSession;
+  onSessionUpdate: (session: ChatSession) => void;
 }
 
-const WebsiteCreatorPage: React.FC<WebsiteCreatorPageProps> = ({ currentUser }) => {
-  const [htmlCode, setHtmlCode] = useState<string>('<!DOCTYPE html><html><head><style>body { background-color: #111827; color: #9ca3af; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; text-align: center; }</style></head><body><div><h1>Live Preview</h1><p>Your generated website will appear here.</p></div></body></html>');
+const WebsiteCreatorPage: React.FC<WebsiteCreatorPageProps> = ({ currentUser, session, onSessionUpdate }) => {
+  const [htmlCode, setHtmlCode] = useState<string>('');
+  
+  const initialHtml = '<!DOCTYPE html><html><head><style>body { background-color: #111827; color: #9ca3af; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; text-align: center; }</style></head><body><div><h1>Live Preview</h1><p>Your generated website will appear here.</p></div></body></html>';
+
+  useEffect(() => {
+    // Find the last model message with code in the history
+    const lastCodeMessage = [...session.messages]
+        .reverse()
+        .find(msg => msg.role === 'model' && msg.content.includes('```html'));
+
+    if (lastCodeMessage) {
+        const codeMatch = lastCodeMessage.content.match(/```html\s*([\s\S]*?)\s*```/);
+        if (codeMatch && codeMatch[1]) {
+            setHtmlCode(codeMatch[1]);
+            return;
+        }
+    }
+    setHtmlCode(initialHtml);
+
+  }, [session.id, session.messages]);
+
 
   return (
     <div className="flex flex-col md:flex-row flex-grow h-full gap-4">
       {/* Chat Panel */}
       <div className="flex flex-col md:w-1/2 h-full">
          <ChatInterface
-            key={`${currentUser.id}-website`}
+            session={session}
+            onSessionUpdate={onSessionUpdate}
             page={Page.WebsiteCreator}
             systemInstruction={SYSTEM_INSTRUCTION_WEBSITE_CREATOR}
             placeholderText="Describe the website you want to build..."

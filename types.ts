@@ -30,3 +30,10 @@ export interface User {
   password?: string; // Hashed password, for storage only
   profilePicture?: string; // base64 data URL
 }
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  createdAt: number;
+  messages: Message[];
+}

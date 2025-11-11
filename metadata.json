@@ -1,0 +1,7 @@
+{
+  "name": "Slyntos AI",
+  "description": "A versatile AI assistant for general and academic tasks. It provides a dedicated mode for generating high-quality, original academic content.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
